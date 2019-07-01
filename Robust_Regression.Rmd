@@ -2,29 +2,132 @@
 title: "Robust Regression"
 author: "Hao"
 date: "7/1/2019"
-output: html_document
+output: 
+  html_document:
+    number_sections: false
+    toc: true
+    fig_width: 8
+    fig_height: 6
+    theme: journal
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, fig.width = 8, fig.height = 6, message = F, warning = F)
 ```
 
-## R Markdown
+# **Introduction**
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Robust regression is an alternative to least squares regression when data are contaminated with outliers or influential observations, and it can also be used for the purpose of detecting influential observations.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Please note: The purpose of this page is to show how to use various data analysis commands. It does not cover all aspects of the research process which researchers are expected to do. In particular, it does not cover data cleaning and checking, verification of assumptions, model diagnostics or potential follow-up analyses.
 
-```{r cars}
-summary(cars)
+Let’s begin our discussion on robust regression with some terms in linear regression.
+
+**Residual**: The difference between the predicted value (based on the regression equation) and the actual, observed value.
+
+**Outlier**: In linear regression, an outlier is an observation with large residual. In other words, it is an observation whose dependent-variable value is unusual given its value on the predictor variables. An outlier may indicate a sample peculiarity or may indicate a data entry error or other problem.
+
+**Leverage**: An observation with an extreme value on a predictor variable is a point with high leverage. Leverage is a measure of how far an independent variable deviates from its mean. High leverage points can have a great amount of effect on the estimate of regression coefficients.
+
+**Influence**: An observation is said to be influential if removing the observation substantially changes the estimate of the regression coefficients. Influence can be thought of as the product of leverage and outlierness.
+
+**Cook’s distance** (or Cook’s D): A measure that combines the information of leverage and residual of the observation.
+
+Robust regression can be used in any situation in which you would use least squares regression. When fitting a least squares regression, we might find some outliers or high leverage data points. We have decided that these data points are not data entry errors, neither they are from a different population than most of our data. So we have no compelling reason to exclude them from the analysis. Robust regression might be a good strategy since it is a compromise between excluding these points entirely from the analysis and including all the data points and treating all them equally in OLS regression. The idea of robust regression is to weigh the observations differently based on how well behaved these observations are. Roughly speaking, it is a form of weighted and reweighted least squares regression.
+
+The **rlm** command in the **MASS** package command implements several versions of robust regression. In this page, we will show M-estimation with Huber and bisquare weighting. These two are very standard. M-estimation defines a weight function such that the estimating equation becomes $\sum_{i=1}^{n}w_i(y_i-x^{'}b)x_i^{'}=0$. But the weights depend on the residuals and the residuals on the weights. The equation is solved using **I**teratively **R**eweighted **L**east **S**quares (IRLS). For example, the coefficient matrix at iteration j is $B_j=[X^{'}W_{j-1}X]^{-1}X^{'}W_{j-1}Y$ where the subscripts indicate the matrix at a particular iteration (*not* rows or columns). The process continues until it converges. In Huber weighting, observations with small residuals get a weight of 1 and the larger the residual, the smaller the weight. This is defined by the weight function
+$w(e)$$
+With bisquare weighting, all cases with a non-zero residual get down-weighted at least a little.
+
+# **Description of the example data**
+
+```{r}
+require(foreign)
+require(MASS)
 ```
 
-## Including Plots
+For our data analysis below, we will use the crime dataset that appears in *Statistical Methods for Social Sciences, Third Edition by Alan Agresti* and Barbara Finlay (Prentice Hall, 1997). The variables are state id (`sid`), state name (`state`), violent crimes per 100,000 people (`crime`), murders per 1,000,000 (`murder`), the percent of the population living in metropolitan areas (`pctmetro`), the percent of the population that is white (`pctwhite`), percent of population with a high school education or above (`pcths`), percent of population living under poverty line (`poverty`), and percent of population that are single parents (`single`). It has 51 observations. We are going to use *poverty* and *single* to predict *crime*.
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+cdata <- read.dta("https://stats.idre.ucla.edu/stat/data/crime.dta")
+summary(cdata)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# **Using robust regression analysis**
+
+In most cases, we begin by running an OLS regression and doing some diagnostics. We will begin by running an OLS regression and looking at diagnostic plots examining residuals, fitted values, Cook’s distance, and leverage.
+
+```{r}
+summary(ols <- lm(crime ~ poverty + single, data = cdata))
+
+opar <- par(mfrow = c(2,2), oma = c(0, 0, 1.1, 0))
+plot(ols, las = 1)
+
+par(opar)
+```
+
+From these plots, we can identify observations 9, 25, and 51 as possibly problematic to our model. We can look at these observations to see which states they represent.
+
+```{r}
+cdata[c(9, 25, 51), 1:2]
+```
+
+DC, Florida and Mississippi have either high leverage or large residuals. We can display the observations that have relatively large values of Cook’s D. A conventional cut-off point is $4/n$, where $n$ is the number of observations in the data set. We will use this criterion to select the values to display.
+
+```{r}
+d1 <- cooks.distance(ols)
+r <- stdres(ols)
+a <- cbind(cdata, d1, r)
+a[d1 > 4/51, ]
+```
+
+We probably should drop DC to begin with since it is not even a state. We include it in the analysis just to show that it has large Cook’s D and demonstrate how it will be handled by **rlm**. Now we will look at the residuals. We will generate a new variable called **absr1**, which is the absolute value of the residuals (because the sign of the residual doesn’t matter). We then print the ten observations with the highest absolute residual values.
+
+```{r}
+rabs <- abs(r)
+a <- cbind(cdata, d1, r, rabs)
+asorted <- a[order(-rabs), ]
+asorted[1:10, ]
+```
+
+Now let’s run our first robust regression. Robust regression is done by iterated re-weighted least squares (IRLS). The command for running robust regression is **rlm** in the **MASS** package. There are several weighting functions that can be used for IRLS. We are going to first use the Huber weights in this example. We will then look at the final weights created by the IRLS process. This can be very useful.
+
+```{r}
+summary(rr.huber <- rlm(crime ~ poverty + single, data = cdata))
+hweights <- data.frame(state = cdata$state, resid = rr.huber$resid, weight = rr.huber$w)
+hweights2 <- hweights[order(rr.huber$w), ]
+hweights2[1:15, ]
+```
+
+We can see that roughly, as the absolute residual goes down, the weight goes up. In other words, cases with a large residuals tend to be down-weighted. This output shows us that the observation for Mississippi will be down-weighted the most. Florida will also be substantially down-weighted. All observations not shown above have a weight of 1. In OLS regression, all cases have a weight of 1. Hence, the more cases in the robust regression that have a weight close to one, the closer the results of the OLS and robust regressions.
+
+Next, let’s run the same model, but using the bisquare weighting function. Again, we can look at the weights.
+
+```{r}
+rr.bisquare <- rlm(crime ~ poverty + single, data=cdata, psi = psi.bisquare)
+summary(rr.bisquare)
+
+biweights <- data.frame(state = cdata$state, resid = rr.bisquare$resid, weight = rr.bisquare$w)
+biweights2 <- biweights[order(rr.bisquare$w), ]
+biweights2[1:15, ]
+```
+
+We can see that the weight given to Mississippi is dramatically lower using the bisquare weighting function than the Huber weighting function and the parameter estimates from these two different weighting methods differ. When comparing the results of a regular OLS regression and a robust regression, if the results are very different, you will most likely want to use the results from the robust regression. Large differences suggest that the model parameters are being highly influenced by outliers. Different functions have advantages and drawbacks. Huber weights can have difficulties with severe outliers, and bisquare weights can have difficulties converging or may yield multiple solutions.
+
+As you can see, the results from the two analyses are fairly different, especially with respect to the coefficients of **single** and the constant (**intercept**). While normally we are not interested in the constant, if you had centered one or both of the predictor variables, the constant would be useful. On the other hand, you will notice that **poverty** is not statistically significant in either analysis, whereas **single** is significant in both analyses.
+
+# **Things to consider**
+
+  - Robust regression does not address issues of heterogeneity of variance. This problem can be addressed by using functions in the **sandwich** package after the **lm** function.
+  - The examples shown here have presented **R** code for M estimation. There are other estimation options available in **rlm** and other R commands and packages: Least trimmed squares using **ltsReg** in the **robustbase** package and MM using **rlm**.
+
+# **References**
+
+  - Li, G. 1985. *Robust regression*. In *Exploring Data Tables, Trends, and Shapes*, ed. D. C. Hoaglin, F. Mosteller, and J. W. Tukey, Wiley.
+  - John Fox, *Applied regression analysis, linear models, and related models*, Sage publications, Inc, 1997
+
+
+# **See also**
+
+[R documentation for rlm](https://stat.ethz.ch/R-manual/R-patched/library/MASS/html/rlm.html)

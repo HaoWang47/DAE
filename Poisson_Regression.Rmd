@@ -2,7 +2,11 @@
 title: "Poisson Regression"
 author: "Hao"
 date: "7/1/2019"
-output: html_document
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
